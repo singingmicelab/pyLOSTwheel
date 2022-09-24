@@ -12,6 +12,8 @@ from datetime import datetime
 import sys
 import numpy as np
 from enum import Enum
+import os
+import serial
 
 import matplotlib
 matplotlib.use('QtAgg')
@@ -34,16 +36,72 @@ class LOSTwheelAcquisitionThread(QThread):
 
     """
 
-    measurement = Signal(float, float)
+    measurement = Signal(float, float, int)
 
-    def __init__(self, measurement_interval, *args, **kwargs):
+    def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.measurement_interval = measurement_interval
+        self.arduino = None
+
+        self.isWriting = False
+        self.fileHandle = None
+
+    def setArduino(self, arduino):
+        self.arduino = arduino
+
+    def enableWriting(self, fileHandle):
+        self.isWriting = True
+        self.fileHandle = fileHandle
+
+    def disableWriting(self):
+        self.isWriting = False
+        self.fileHandle = None
 
     def run(self):
-        while not self.isInterruptionRequested():
-            self.measurement.emit(time.time(), time.time())
-            time.sleep(self.measurement_interval)
+        while not self.isInterruptionRequested() and self.arduino is not None:
+            line = self.arduino.readline()
+            pc_timestamp = time.time()
+            arduino_timestamp, count = line.decode().strip().split(',')
+            arduino_timestamp = float(arduino_timestamp)
+            count = int(count)
+            if self.isWriting:
+                print('writing', (pc_timestamp, arduino_timestamp, count))
+                self.fileHandle.write(f'{pc_timestamp},{arduino_timestamp},{count}\n')
+            self.measurement.emit(pc_timestamp, arduino_timestamp, count)
+
+class SlidingWindow:
+    """A SlidingWindow gives access to the 'window_size' most recent values that were appended to it."""
+
+    def __init__(self, window_size, dtype, buffer_size=None):
+        if buffer_size is None:
+            self.buffer_size = 5 * window_size
+        else:
+            self.buffer_size = buffer_size
+        self.dtype = dtype
+        self.data = np.empty(self.buffer_size, dtype=self.dtype)
+        self.n = 0
+        self.window_size = window_size
+
+    def reset(self):
+        """Reset the SlidingWindow"""
+        self.data = np.empty(self.buffer_size, dtype=self.dtype)
+        self.n = 0
+
+    def append(self, value):
+        """Append a value to the sliding window."""
+        if self.n == len(self.data):
+            # Buffer is full.
+            # Make room.
+            copy_size = self.window_size - 1
+            self.data[:copy_size] = self.data[-copy_size:]
+            self.n = copy_size
+
+        self.data[self.n] = value
+        self.n += 1
+
+    def window(self):
+        """Get a window of the most recent 'window_size' samples (or less if not available.)"""
+        return self.data[max(0, self.n - self.window_size):self.n]
+
 
 class AcquisitionGraphWidget(QWidget):
     """A Widget that has two plots and updates its data based on QThread
@@ -53,59 +111,57 @@ class AcquisitionGraphWidget(QWidget):
 
         super().__init__(*args, **kwargs)
 
+        self.windowSize = 60
+
         self.acquisitionThread = acquisitionThread
+
+        dataDtype = np.dtype([('pc_ts', np.float64), ('ar_ts', np.float64), ('val', np.int64)])
+        self.dataWindow = SlidingWindow(self.windowSize, dataDtype)
 
         fig = Figure()
         self.ax1 = fig.add_subplot(121)
         self.ax2 = fig.add_subplot(122)
         self.canvas = FigureCanvas(fig)
+        self.updateGraph()
 
         layout = QHBoxLayout()
         layout.addWidget(self.canvas)
         self.setLayout(layout)
 
         self.acquisitionThread.measurement.connect(self.handleMeasurement)
-    
-    def handleMeasurement(self, timestamp, value):
+
+    def reset(self):
+        """reset the slidingwindow and the graph"""
+        self.dataWindow.reset()
+        self.updateGraph()
+
+    def handleMeasurement(self, pc_timestamp, arduino_timestamp, value):
         """Receive a timestamped value and update the graph
         
         """
 
-        print('graphing', (timestamp, value))
+        print('graphing', (pc_timestamp, arduino_timestamp, value))
+        self.dataWindow.append((pc_timestamp, arduino_timestamp, value))
 
+        self.updateGraph()
 
-class AcquisitionWriter:
-    """Class that handles writing data from LOSTwheel to file
-    
-    """
+    def updateGraph(self):
+        """Update graph"""
 
-    def __init__(self, acquisitionThread, *args, **kwargs):
+        w = self.dataWindow.window()
 
-        self.isWriting = False
-        self.fileHandle = None
+        self.ax1.clear()
+        if w.size == 0:
+            self.ax1.set_xlim([1, 1+self.windowSize])
+            self.ax1.set_ylim([0,18])
+            self.ax1.set_yticks(range(0,20,2))
+        else:
+            self.ax1.plot(w['ar_ts'], w['val'])
+            self.ax1.set_xlim([w['ar_ts'][0], w['ar_ts'][0]+self.windowSize])
+            self.ax1.set_ylim([0,18])
+            self.ax1.set_yticks(range(0,20,2))
 
-        self.acquisitionThread = acquisitionThread
-
-        self.acquisitionThread.measurement.connect(self.writeMeasurement)
-
-    def startWriting(self, timestamp):
-
-        print('start writing', timestamp)
-        self.isWriting = True
-    
-    def stopWriting(self):
-
-        print('stop writing')
-        self.isWriting = False
-
-    def writeMeasurement(self, timestamp, value):
-        """Receive a timestamped value and write them to file
-        
-        """
-        if self.isWriting:
-            print('writing', (timestamp, value))
-
-
+        self.canvas.draw()
 
 class MainWindow(QMainWindow):
     """The pyLOSTwheel GUI application.
@@ -126,6 +182,13 @@ class MainWindow(QMainWindow):
         # set initial state
         self.guiState = GuiState.IDLE
 
+        # set arduino
+        self.port = 'COM3'
+        self.arduino = None
+        # set file base path
+        self.basePath = 'C:/Users/martin/Desktop/'
+        self.fileHandle = None
+
         # initialize gui
         self._createActions()
         self._createMenuBar()
@@ -133,15 +196,11 @@ class MainWindow(QMainWindow):
         self.statusBar()
 
         # add wheel measurement thread
-        self.acquisitionThread = LOSTwheelAcquisitionThread(1.0)
+        self.acquisitionThread = LOSTwheelAcquisitionThread()
 
         # add acquisition graph
         self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread)
         self.setCentralWidget(self.acquisitionGraphWidget)
-
-        # add acquisition writer
-        self.acquisitionWriter = AcquisitionWriter(self.acquisitionThread)
-
 
 
     def _createActions(self):
@@ -199,7 +258,14 @@ class MainWindow(QMainWindow):
 
         self.guiState = GuiState.MONITOR
 
+        # reset graph widget
+        self.acquisitionGraphWidget.reset()
+        self.acquisitionThread.disableWriting()
+
+        # start serial connection
+        self.arduino = serial.Serial(port=self.port, baudrate=9600)
         # start acquisition thread
+        self.acquisitionThread.setArduino(self.arduino)
         self.acquisitionThread.start()
 
     def recordButtonClicked(self):
@@ -210,11 +276,18 @@ class MainWindow(QMainWindow):
 
         self.guiState = GuiState.RECORD
 
+        # reset graph widget
+        self.acquisitionGraphWidget.reset()
+        
+        # start serial connection
+        self.arduino = serial.Serial(port=self.port, baudrate=9600)
         # start writer
-        self.acquisitionWriter.startWriting(datetime.now().strftime('%Y%m%d%H%M%S'))
+        self.fileHandle = open(os.path.join(self.basePath, f"{self.port}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"), 'w')
+        self.fileHandle.write('pc_timestamp,arduino_timestamp,count\n')
+        self.acquisitionThread.enableWriting(self.fileHandle)
         # start acquisition thread
+        self.acquisitionThread.setArduino(self.arduino)
         self.acquisitionThread.start()
-
 
     def stopButtonClicked(self):
         print('stop!')
@@ -225,9 +298,14 @@ class MainWindow(QMainWindow):
         # stop acquisition thread
         self.acquisitionThread.requestInterruption()
         self.acquisitionThread.wait()
-        # stop writer
+
+        self.arduino.close()
+        self.arduino = None
+        self.acquisitionThread.setArduino(None)
         if self.guiState == GuiState.RECORD:
-            self.acquisitionWriter.stopWriting()
+            self.fileHandle.close()
+            self.fileHandle = None
+        self.acquisitionThread.disableWriting()
 
         self.guiState = GuiState.IDLE
 

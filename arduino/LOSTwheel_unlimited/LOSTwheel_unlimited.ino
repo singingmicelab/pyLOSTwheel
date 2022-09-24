@@ -43,8 +43,8 @@ void setup()
 
   attachInterrupt(digitalPinToInterrupt(hallsensor), sensor, FALLING); //attach interrupt
   pinMode(hallsensor, INPUT); //setup hall sensor
-  myservo.attach(9); //setup pin for servo
-  myservo.write(openpos); //default state is open
+//  myservo.attach(9); //setup pin for servo
+//  myservo.write(openpos); //default state is open
 
   previousTime = 0;
   startupTime = millis();
