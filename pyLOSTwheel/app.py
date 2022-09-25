@@ -18,8 +18,8 @@ import serial
 import matplotlib
 matplotlib.use('QtAgg')
 
-from PySide6.QtCore import QSize, QTimer, Signal, QThread
-from PySide6.QtGui import QAction, QIcon
+from PySide6.QtCore import QSize, Signal, QThread
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QToolBar, QPushButton, QHBoxLayout
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
@@ -71,19 +71,19 @@ class LOSTwheelAcquisitionThread(QThread):
 class SlidingWindow:
     """A SlidingWindow gives access to the 'window_size' most recent values that were appended to it."""
 
-    def __init__(self, window_size, dtype, buffer_size=None):
+    def __init__(self, window_size, n_dim, buffer_size=None):
         if buffer_size is None:
             self.buffer_size = 5 * window_size
         else:
             self.buffer_size = buffer_size
-        self.dtype = dtype
-        self.data = np.empty(self.buffer_size, dtype=self.dtype)
+        self.n_dim = n_dim
+        self.data = np.zeros((self.buffer_size, self.n_dim), dtype=np.float64)
         self.n = 0
         self.window_size = window_size
 
     def reset(self):
         """Reset the SlidingWindow"""
-        self.data = np.empty(self.buffer_size, dtype=self.dtype)
+        self.data = np.zeros((self.buffer_size, self.n_dim), dtype=np.float64)
         self.n = 0
 
     def append(self, value):
@@ -92,15 +92,45 @@ class SlidingWindow:
             # Buffer is full.
             # Make room.
             copy_size = self.window_size - 1
-            self.data[:copy_size] = self.data[-copy_size:]
+            self.data[:copy_size,:] = self.data[-copy_size:,:]
             self.n = copy_size
 
-        self.data[self.n] = value
+        self.data[self.n,:] = value
         self.n += 1
 
     def window(self):
         """Get a window of the most recent 'window_size' samples (or less if not available.)"""
-        return self.data[max(0, self.n - self.window_size):self.n]
+        return self.data[max(0, self.n - self.window_size):self.n,:]
+
+class SlidingSumWindow(SlidingWindow):
+    """Inherits SlidingWindow. Instead of displaying every new value, display the sum of sum_window_size new values"""
+
+    def __init__(self, window_size, sum_window_size, n_dim, buffer_size=None):
+        
+        SlidingWindow.__init__(self, window_size, n_dim, buffer_size)
+
+        self.sum_window_size = sum_window_size
+        self.current_sample_count = 0
+
+    def reset(self):
+        SlidingWindow.reset(self)
+        self.current_sample_count = 0
+
+    def append(self, value):
+        if self.n == len(self.data):
+            # Buffer is full.
+            # Make room.
+            copy_size = self.window_size - 1
+            self.data[:copy_size] = self.data[-copy_size:,:]
+            self.data[-1,:] = 0
+            self.n = copy_size
+        
+        self.data[self.n] += value
+        self.current_sample_count += 1
+
+        if self.current_sample_count == self.sum_window_size:
+            self.current_sample_count = 0
+            self.n += 1
 
 
 class AcquisitionGraphWidget(QWidget):
@@ -111,14 +141,17 @@ class AcquisitionGraphWidget(QWidget):
 
         super().__init__(*args, **kwargs)
 
-        self.windowSize = 60
-
         self.acquisitionThread = acquisitionThread
 
-        dataDtype = np.dtype([('pc_ts', np.float64), ('ar_ts', np.float64), ('val', np.int64)])
-        self.dataWindow = SlidingWindow(self.windowSize, dataDtype)
+        # the three dimensions are: pc_timestamp, ar_timestamp, value
+        self.windowSize = 60 # seconds
+        self.dataWindow = SlidingWindow(self.windowSize, 3)
+
+        self.sumWindowSize = 60 # 1 point every 60 seconds
+        self.dataSumWindow = SlidingSumWindow(self.windowSize, self.sumWindowSize, 3)
 
         fig = Figure()
+        fig.set_layout_engine('tight')
         self.ax1 = fig.add_subplot(121)
         self.ax2 = fig.add_subplot(122)
         self.canvas = FigureCanvas(fig)
@@ -133,6 +166,7 @@ class AcquisitionGraphWidget(QWidget):
     def reset(self):
         """reset the slidingwindow and the graph"""
         self.dataWindow.reset()
+        self.dataSumWindow.reset()
         self.updateGraph()
 
     def handleMeasurement(self, pc_timestamp, arduino_timestamp, value):
@@ -142,6 +176,7 @@ class AcquisitionGraphWidget(QWidget):
 
         print('graphing', (pc_timestamp, arduino_timestamp, value))
         self.dataWindow.append((pc_timestamp, arduino_timestamp, value))
+        self.dataSumWindow.append((pc_timestamp, arduino_timestamp, value))
 
         self.updateGraph()
 
@@ -149,17 +184,34 @@ class AcquisitionGraphWidget(QWidget):
         """Update graph"""
 
         w = self.dataWindow.window()
+        w_sum = self.dataSumWindow.window()
 
         self.ax1.clear()
         if w.size == 0:
             self.ax1.set_xlim([1, 1+self.windowSize])
-            self.ax1.set_ylim([0,18])
-            self.ax1.set_yticks(range(0,20,2))
         else:
-            self.ax1.plot(w['ar_ts'], w['val'])
-            self.ax1.set_xlim([w['ar_ts'][0], w['ar_ts'][0]+self.windowSize])
-            self.ax1.set_ylim([0,18])
-            self.ax1.set_yticks(range(0,20,2))
+            self.ax1.plot(w[:,1], w[:,2])
+            self.ax1.set_xlim([w[0,1], w[0,1]+self.windowSize])
+        self.ax1.set_xlabel('current minute')
+        self.ax1.set_xticks([])
+        self.ax1.set_ylabel('counts')
+        self.ax1.set_ylim([0,18])
+        self.ax1.set_yticks(range(0,20,2))
+
+        self.ax2.clear()
+        if w_sum.size == 0:
+            xlim_l = time.time()
+            xlim_r = xlim_l+self.sumWindowSize*self.windowSize
+        else:
+            time_bincenter = w_sum[:,0] / self.sumWindowSize - 0.5*self.sumWindowSize
+            self.ax2.bar(time_bincenter, w_sum[:,2], width=self.sumWindowSize)
+            xlim_l = time_bincenter[0]
+            xlim_r = time_bincenter[0]+self.sumWindowSize*self.windowSize
+        self.ax2.set_xlim(xlim_l, xlim_r)
+        self.ax2.set_xticks([xlim_l, xlim_r])
+        self.ax2.set_xticklabels([datetime.fromtimestamp(xlim_l).strftime('%H:%M'), datetime.fromtimestamp(xlim_r).strftime('%H:%M')])
+        self.ax2.set_ylabel('counts in chunk')
+        self.ax2.set_ylim([0,800])
 
         self.canvas.draw()
 
@@ -305,12 +357,12 @@ class MainWindow(QMainWindow):
         if self.guiState == GuiState.RECORD:
             self.fileHandle.close()
             self.fileHandle = None
-        self.acquisitionThread.disableWriting()
+            self.acquisitionThread.disableWriting()
 
         self.guiState = GuiState.IDLE
 
-
-if __name__ == '__main__':
+def main():
+    """main function - entry point"""
 
     app = QApplication([])
     app.setApplicationName('pyLOSTwheel')
@@ -319,3 +371,6 @@ if __name__ == '__main__':
     window.show()
 
     sys.exit(app.exec())
+
+if __name__ == '__main__':
+    main()

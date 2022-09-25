@@ -1,3 +1,4 @@
+from importlib.metadata import entry_points
 from setuptools import setup, find_packages
 
 setup(
@@ -11,5 +12,8 @@ setup(
         "pyserial",
         "PySide6",
         "matplotlib",
-    ]
+    ],
+    entry_points={
+        'console_scripts': ['pyLOSTwheel=pyLOSTwheel.app:main'],
+    },
 )
