@@ -20,7 +20,7 @@ matplotlib.use('QtAgg')
 
 from PySide6.QtCore import QSize, Signal, QThread
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QToolBar, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QToolBar, QPushButton, QVBoxLayout, QLabel, QDialog, QDialogButtonBox, QLineEdit
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
@@ -137,11 +137,16 @@ class AcquisitionGraphWidget(QWidget):
     """A Widget that has two plots and updates its data based on QThread
     
     """
-    def __init__(self, acquisitionThread, *args, **kwargs):
+    def __init__(self, acquisitionThread, id, port, *args, **kwargs):
 
         super().__init__(*args, **kwargs)
 
         self.acquisitionThread = acquisitionThread
+        self.id = id
+        self.port = port
+
+        # add label for id and port
+        self.label = QLabel(f'{self.id} - {self.port}')
 
         # the three dimensions are: pc_timestamp, ar_timestamp, value
         self.windowSize = 60 # seconds
@@ -157,7 +162,8 @@ class AcquisitionGraphWidget(QWidget):
         self.canvas = FigureCanvas(fig)
         self.updateGraph()
 
-        layout = QHBoxLayout()
+        layout = QVBoxLayout()
+        layout.addWidget(self.label)
         layout.addWidget(self.canvas)
         self.setLayout(layout)
 
@@ -215,6 +221,29 @@ class AcquisitionGraphWidget(QWidget):
 
         self.canvas.draw()
 
+class SettingsDialog(QDialog):
+    """Dialog to control settings
+    
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        self.setWindowTitle("Settings")
+
+        self.idLineEdit = QLineEdit('id')
+
+        QBtn = QDialogButtonBox.Ok | QDialogButtonBox.Cancel
+
+        self.buttonBox = QDialogButtonBox(QBtn)
+        self.buttonBox.accepted.connect(self.accept)
+        self.buttonBox.rejected.connect(self.reject)
+
+        self.layout = QVBoxLayout()
+        self.layout.addWidget(self.idLineEdit)
+        self.layout.addWidget(self.buttonBox)
+        self.setLayout(self.layout)
+
 class MainWindow(QMainWindow):
     """The pyLOSTwheel GUI application.
 
@@ -235,6 +264,7 @@ class MainWindow(QMainWindow):
         self.guiState = GuiState.IDLE
 
         # set arduino
+        self.id = 'test'
         self.port = 'COM3'
         self.arduino = None
         # set file base path
@@ -245,13 +275,13 @@ class MainWindow(QMainWindow):
         self._createActions()
         self._createMenuBar()
         self._createToolBar()
-        self.statusBar()
+        self._createStatusBar()
 
         # add wheel measurement thread
         self.acquisitionThread = LOSTwheelAcquisitionThread()
 
         # add acquisition graph
-        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread)
+        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.port)
         self.setCentralWidget(self.acquisitionGraphWidget)
 
 
@@ -293,22 +323,38 @@ class MainWindow(QMainWindow):
         self.monitorButton = QPushButton('Monitor')
         self.recordButton = QPushButton('Record')
         self.stopButton = QPushButton('Stop')
+        self.settingsButton = QPushButton('Settings')
         self.stopButton.setEnabled(False)
         self.monitorButton.clicked.connect(self.monitorButtonClicked)
         self.recordButton.clicked.connect(self.recordButtonClicked)
         self.stopButton.clicked.connect(self.stopButtonClicked)
+        self.settingsButton.clicked.connect(self.settingsButtonClicked)
         toolbar.addWidget(self.monitorButton)
         toolbar.addWidget(self.recordButton)
         toolbar.addWidget(self.stopButton)
+        toolbar.addWidget(self.settingsButton)
 
+    def _createStatusBar(self):
+        """create status bar
+
+        """
+        statusBar = self.statusBar()
+        # status widget
+        self.statusLabel = QLabel('Ready')
+        statusBar.addWidget(self.statusLabel)
+        # basepath widget
+        self.basePathLabel = QLabel(self.basePath)
+        statusBar.addPermanentWidget(self.basePathLabel)
 
     def monitorButtonClicked(self):
         print('start monitoring!')
         self.monitorButton.setEnabled(False)
         self.recordButton.setEnabled(False)
         self.stopButton.setEnabled(True)
+        self.settingsButton.setEnabled(False)
 
         self.guiState = GuiState.MONITOR
+        self.statusLabel.setText('Monitoring')
 
         # reset graph widget
         self.acquisitionGraphWidget.reset()
@@ -325,8 +371,10 @@ class MainWindow(QMainWindow):
         self.monitorButton.setEnabled(False)
         self.recordButton.setEnabled(False)
         self.stopButton.setEnabled(True)
+        self.settingsButton.setEnabled(False)
 
         self.guiState = GuiState.RECORD
+        self.statusLabel.setText('Recording')
 
         # reset graph widget
         self.acquisitionGraphWidget.reset()
@@ -346,6 +394,7 @@ class MainWindow(QMainWindow):
         self.monitorButton.setEnabled(True)
         self.recordButton.setEnabled(True)
         self.stopButton.setEnabled(False)
+        self.settingsButton.setEnabled(True)
 
         # stop acquisition thread
         self.acquisitionThread.requestInterruption()
@@ -360,6 +409,15 @@ class MainWindow(QMainWindow):
             self.acquisitionThread.disableWriting()
 
         self.guiState = GuiState.IDLE
+        self.statusLabel.setText('Ready')
+
+    def settingsButtonClicked(self):
+        print('open settings')
+        settingsDialog = SettingsDialog(self)
+        if settingsDialog.exec():
+            print("Settings updated!")
+        else:
+            print("Settings canceled")
 
 def main():
     """main function - entry point"""
