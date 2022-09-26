@@ -207,7 +207,7 @@ class AcquisitionGraphWidget(QWidget):
             self.ax2.bar(time_bincenter, w_sum[:,2], width=self.sumWindowSize)
             xlim_l = time_bincenter[0]
             xlim_r = time_bincenter[0]+self.sumWindowSize*self.windowSize
-        self.ax2.set_xlim(xlim_l, xlim_r)
+        self.ax2.set_xlim([xlim_l-0.5*self.sumWindowSize, xlim_r+0.5*self.sumWindowSize])
         self.ax2.set_xticks([xlim_l, xlim_r])
         self.ax2.set_xticklabels([datetime.fromtimestamp(xlim_l).strftime('%H:%M'), datetime.fromtimestamp(xlim_r).strftime('%H:%M')])
         self.ax2.set_ylabel('counts in chunk')
