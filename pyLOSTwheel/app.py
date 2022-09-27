@@ -221,6 +221,70 @@ class AcquisitionGraphWidget(QWidget):
 
         self.canvas.draw()
 
+class Experiment:
+    """A class that organizes an acquisition wheel experiment
+    
+    """
+
+    def __init__(self, id, port, basePath):
+
+        self.id = id
+        self.port = port
+        self.basePath = basePath
+
+        self.arduino = None
+        self.fileHandle = None
+
+        # add wheel measurement thread
+        self.acquisitionThread = LOSTwheelAcquisitionThread()
+
+        # add acquisition graph
+        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.port)
+
+    def startMonitor(self):
+
+        # reset graph widget
+        self.acquisitionGraphWidget.reset()
+        self.acquisitionThread.disableWriting()
+
+        # start serial connection
+        self.arduino = serial.Serial(port=self.port, baudrate=9600)
+        # start acquisition thread
+        self.acquisitionThread.setArduino(self.arduino)
+        self.acquisitionThread.start()
+
+    def startRecord(self):
+
+        # reset graph widget
+        self.acquisitionGraphWidget.reset()
+        
+        # start serial connection
+        self.arduino = serial.Serial(port=self.port, baudrate=9600)
+        # start writer
+        self.fileHandle = open(os.path.join(self.basePath, f"{self.port}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"), 'w')
+        self.fileHandle.write('pc_timestamp,arduino_timestamp,count\n')
+        self.acquisitionThread.enableWriting(self.fileHandle)
+        # start acquisition thread
+        self.acquisitionThread.setArduino(self.arduino)
+        self.acquisitionThread.start()
+
+
+    def stop(self, guiState):
+
+        # stop acquisition thread
+        self.acquisitionThread.requestInterruption()
+        self.acquisitionThread.wait()
+
+        self.arduino.close()
+        self.arduino = None
+        self.acquisitionThread.setArduino(None)
+        if guiState == GuiState.RECORD:
+            self.fileHandle.close()
+            self.fileHandle = None
+            self.acquisitionThread.disableWriting()
+
+
+
 class SettingsDialog(QDialog):
     """Dialog to control settings
     
@@ -263,13 +327,10 @@ class MainWindow(QMainWindow):
         # set initial state
         self.guiState = GuiState.IDLE
 
-        # set arduino
+        # set acquisition params
         self.id = 'test'
         self.port = 'COM3'
-        self.arduino = None
-        # set file base path
         self.basePath = 'C:/Users/martin/Desktop/'
-        self.fileHandle = None
 
         # initialize gui
         self._createActions()
@@ -277,12 +338,11 @@ class MainWindow(QMainWindow):
         self._createToolBar()
         self._createStatusBar()
 
-        # add wheel measurement thread
-        self.acquisitionThread = LOSTwheelAcquisitionThread()
+        # create experiment
+        self.experiment = Experiment(self.id, self.port, self.basePath)
 
-        # add acquisition graph
-        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.port)
-        self.setCentralWidget(self.acquisitionGraphWidget)
+        # add graph widget
+        self.setCentralWidget(self.experiment.acquisitionGraphWidget)
 
 
     def _createActions(self):
@@ -356,15 +416,7 @@ class MainWindow(QMainWindow):
         self.guiState = GuiState.MONITOR
         self.statusLabel.setText('Monitoring')
 
-        # reset graph widget
-        self.acquisitionGraphWidget.reset()
-        self.acquisitionThread.disableWriting()
-
-        # start serial connection
-        self.arduino = serial.Serial(port=self.port, baudrate=9600)
-        # start acquisition thread
-        self.acquisitionThread.setArduino(self.arduino)
-        self.acquisitionThread.start()
+        self.experiment.startMonitor()
 
     def recordButtonClicked(self):
         print('start recording!')
@@ -376,18 +428,7 @@ class MainWindow(QMainWindow):
         self.guiState = GuiState.RECORD
         self.statusLabel.setText('Recording')
 
-        # reset graph widget
-        self.acquisitionGraphWidget.reset()
-        
-        # start serial connection
-        self.arduino = serial.Serial(port=self.port, baudrate=9600)
-        # start writer
-        self.fileHandle = open(os.path.join(self.basePath, f"{self.port}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"), 'w')
-        self.fileHandle.write('pc_timestamp,arduino_timestamp,count\n')
-        self.acquisitionThread.enableWriting(self.fileHandle)
-        # start acquisition thread
-        self.acquisitionThread.setArduino(self.arduino)
-        self.acquisitionThread.start()
+        self.experiment.startRecord()
 
     def stopButtonClicked(self):
         print('stop!')
@@ -396,17 +437,7 @@ class MainWindow(QMainWindow):
         self.stopButton.setEnabled(False)
         self.settingsButton.setEnabled(True)
 
-        # stop acquisition thread
-        self.acquisitionThread.requestInterruption()
-        self.acquisitionThread.wait()
-
-        self.arduino.close()
-        self.arduino = None
-        self.acquisitionThread.setArduino(None)
-        if self.guiState == GuiState.RECORD:
-            self.fileHandle.close()
-            self.fileHandle = None
-            self.acquisitionThread.disableWriting()
+        self.experiment.stop(self.guiState)
 
         self.guiState = GuiState.IDLE
         self.statusLabel.setText('Ready')
