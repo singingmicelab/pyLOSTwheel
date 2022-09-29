@@ -14,16 +14,29 @@ import numpy as np
 from enum import Enum
 import os
 import serial
+import serial.tools.list_ports
 
 import matplotlib
 matplotlib.use('QtAgg')
 
 from PySide6.QtCore import QSize, Signal, QThread
 from PySide6.QtGui import QAction
-from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QToolBar, QPushButton, QVBoxLayout, QLabel, QDialog, QDialogButtonBox, QLineEdit
+from PySide6.QtWidgets import QApplication, QMainWindow, QWidget, QToolBar, QPushButton, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QDialog, QDialogButtonBox, QFileDialog, QLineEdit, QComboBox
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg as FigureCanvas
 from matplotlib.figure import Figure
+
+def get_arduinos_port_sn():
+    """Get the port name and serial number of all connected arduinos"""
+
+    arduinos = []
+
+    ports = serial.tools.list_ports.comports()
+    for port in ports:
+        if 'Arduino' in port.description:
+            arduinos.append((port.name, port.serial_number))
+    
+    return arduinos
 
 class GuiState(Enum):
     """Define the possible state of the gui"""
@@ -137,16 +150,16 @@ class AcquisitionGraphWidget(QWidget):
     """A Widget that has two plots and updates its data based on QThread
     
     """
-    def __init__(self, acquisitionThread, id, port, *args, **kwargs):
+    def __init__(self, acquisitionThread, id, arduinoInfo, *args, **kwargs):
 
         super().__init__(*args, **kwargs)
 
         self.acquisitionThread = acquisitionThread
         self.id = id
-        self.port = port
+        self.arduinoInfo = arduinoInfo
 
         # add label for id and port
-        self.label = QLabel(f'{self.id} - {self.port}')
+        self.label = QLabel(f'{self.id} - {self.arduinoInfo[0]} ({self.arduinoInfo[1]})')
 
         # the three dimensions are: pc_timestamp, ar_timestamp, value
         self.windowSize = 60 # seconds
@@ -226,10 +239,12 @@ class Experiment:
     
     """
 
-    def __init__(self, id, port, basePath):
+    def __init__(self, id, arduinoInfo, basePath):
 
         self.id = id
-        self.port = port
+        self.arduinoInfo = arduinoInfo
+        self.port = self.arduinoInfo[0]
+        self.sn = self.arduinoInfo[1]
         self.basePath = basePath
 
         self.arduino = None
@@ -239,7 +254,7 @@ class Experiment:
         self.acquisitionThread = LOSTwheelAcquisitionThread()
 
         # add acquisition graph
-        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.port)
+        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.arduinoInfo)
 
     def startMonitor(self):
 
@@ -261,7 +276,7 @@ class Experiment:
         # start serial connection
         self.arduino = serial.Serial(port=self.port, baudrate=9600)
         # start writer
-        self.fileHandle = open(os.path.join(self.basePath, f"{self.port}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"), 'w')
+        self.fileHandle = open(os.path.join(self.basePath, f"{self.id}_{self.sn}_{datetime.now().strftime('%Y%m%d%H%M%S')}.csv"), 'w')
         self.fileHandle.write('pc_timestamp,arduino_timestamp,count\n')
         self.acquisitionThread.enableWriting(self.fileHandle)
         # start acquisition thread
@@ -294,8 +309,39 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
 
         self.setWindowTitle("Settings")
+        self.setMinimumSize(QSize(400,100))
 
-        self.idLineEdit = QLineEdit('id')
+        # properties
+        self.defaultBasePath = os.path.join(os.path.expanduser('~'), 'Desktop')
+        self.basePath = self.defaultBasePath
+        self.arduinos = get_arduinos_port_sn()
+
+        self.id = None
+        self.arduino = None
+
+        # basepath subwidget
+        self.basePathWidget = QWidget()
+        self.basePathSelectLabel = QLabel(self.defaultBasePath)
+        self.basePathSelectButton = QPushButton('Select')
+        self.basePathSelectButton.clicked.connect(self.selectFile)
+        self.basePathSelectButton.setFixedSize(50,23)
+        basePathWidgetLayout = QHBoxLayout()
+        basePathWidgetLayout.addWidget(self.basePathSelectLabel)
+        basePathWidgetLayout.addWidget(self.basePathSelectButton)
+        self.basePathWidget.setLayout(basePathWidgetLayout)
+
+        # experiment subwidget
+        self.experimentWidget = QWidget()
+        experimentWidgetLayout = QGridLayout()
+        self.experimentIdWidget = QLineEdit('')
+        self.experimentIdWidget.setFixedSize(100,23)
+        self.experimentArduinoWidget = QComboBox()
+        self.experimentArduinoWidget.addItems([f'{arduino[0]} ({arduino[1]})' for arduino in self.arduinos])
+        experimentWidgetLayout.addWidget(QLabel('id'), 0, 0)
+        experimentWidgetLayout.addWidget(QLabel('Port (SN)'), 0, 1)
+        experimentWidgetLayout.addWidget(self.experimentIdWidget, 1, 0)
+        experimentWidgetLayout.addWidget(self.experimentArduinoWidget, 1, 1)
+        self.experimentWidget.setLayout(experimentWidgetLayout)
 
         QBtn = QDialogButtonBox.Ok | QDialogButtonBox.Cancel
 
@@ -304,9 +350,24 @@ class SettingsDialog(QDialog):
         self.buttonBox.rejected.connect(self.reject)
 
         self.layout = QVBoxLayout()
-        self.layout.addWidget(self.idLineEdit)
+        self.layout.addWidget(self.basePathWidget)
+        self.layout.addWidget(self.experimentWidget)
         self.layout.addWidget(self.buttonBox)
         self.setLayout(self.layout)
+
+    def selectFile(self):
+        fname = QFileDialog.getExistingDirectory(self, 'Select BasePath', self.defaultBasePath)
+        self.basePath = fname
+        self.basePathSelectLabel.setText(fname)
+
+    def accept(self):
+        """override accept to validate input"""
+        if self.experimentIdWidget.text() != '':
+            self.id = self.experimentIdWidget.text()
+            self.arduino = self.arduinos[self.experimentArduinoWidget.currentIndex()]
+            super().accept()
+
+        
 
 class MainWindow(QMainWindow):
     """The pyLOSTwheel GUI application.
@@ -327,10 +388,8 @@ class MainWindow(QMainWindow):
         # set initial state
         self.guiState = GuiState.IDLE
 
-        # set acquisition params
-        self.id = 'test'
-        self.port = 'COM3'
-        self.basePath = 'C:/Users/martin/Desktop/'
+        # default basepath
+        self.defaultBasePath = os.path.join(os.path.expanduser('~'), 'Desktop')
 
         # initialize gui
         self._createActions()
@@ -338,19 +397,18 @@ class MainWindow(QMainWindow):
         self._createToolBar()
         self._createStatusBar()
 
-        # create experiment
-        self.experiment = Experiment(self.id, self.port, self.basePath)
-
-        # add graph widget
-        self.setCentralWidget(self.experiment.acquisitionGraphWidget)
+        self.basePath = None
+        self.id = None
+        self.arduinoInfo = None
+        self.experiment = None
 
 
     def _createActions(self):
         """Create actions
         
         """
-        self.loadSettingsAction = QAction('Load Settings', self)
-        self.saveSettingsAction = QAction('Save Settings', self)
+        # self.loadSettingsAction = QAction('Load Settings', self)
+        # self.saveSettingsAction = QAction('Save Settings', self)
 
         self.exitAction = QAction('Exit', self)
         self.exitAction.setShortcut('Ctrl+Q')
@@ -365,8 +423,8 @@ class MainWindow(QMainWindow):
         menubar.setNativeMenuBar(False)
 
         fileMenu = menubar.addMenu('File')
-        fileMenu.addAction(self.loadSettingsAction)
-        fileMenu.addAction(self.saveSettingsAction)
+        # fileMenu.addAction(self.loadSettingsAction)
+        # fileMenu.addAction(self.saveSettingsAction)
         fileMenu.addAction(self.exitAction)
 
 
@@ -384,6 +442,8 @@ class MainWindow(QMainWindow):
         self.recordButton = QPushButton('Record')
         self.stopButton = QPushButton('Stop')
         self.settingsButton = QPushButton('Settings')
+        self.monitorButton.setEnabled(False)
+        self.recordButton.setEnabled(False)
         self.stopButton.setEnabled(False)
         self.monitorButton.clicked.connect(self.monitorButtonClicked)
         self.recordButton.clicked.connect(self.recordButtonClicked)
@@ -403,7 +463,7 @@ class MainWindow(QMainWindow):
         self.statusLabel = QLabel('Ready')
         statusBar.addWidget(self.statusLabel)
         # basepath widget
-        self.basePathLabel = QLabel(self.basePath)
+        self.basePathLabel = QLabel(self.defaultBasePath)
         statusBar.addPermanentWidget(self.basePathLabel)
 
     def monitorButtonClicked(self):
@@ -447,6 +507,20 @@ class MainWindow(QMainWindow):
         settingsDialog = SettingsDialog(self)
         if settingsDialog.exec():
             print("Settings updated!")
+            self.basePath = settingsDialog.basePath
+            self.id = settingsDialog.id
+            self.arduinoInfo = settingsDialog.arduino
+
+            self.basePathLabel.setText(self.basePath)
+            self.monitorButton.setEnabled(True)
+            self.recordButton.setEnabled(True)
+
+            # create experiment
+            self.experiment = Experiment(self.id, self.arduinoInfo, self.basePath)
+
+            # add graph widget
+            self.setCentralWidget(self.experiment.acquisitionGraphWidget)
+
         else:
             print("Settings canceled")
 
