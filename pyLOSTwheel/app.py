@@ -362,7 +362,7 @@ class SettingsDialog(QDialog):
 
     def accept(self):
         """override accept to validate input"""
-        if self.experimentIdWidget.text() != '':
+        if self.basePath != '' and self.experimentIdWidget.text() != '':
             self.id = self.experimentIdWidget.text()
             self.arduino = self.arduinos[self.experimentArduinoWidget.currentIndex()]
             super().accept()

@@ -42,7 +42,7 @@ void setup()
   u8x8.setInverseFont(0);
 
   attachInterrupt(digitalPinToInterrupt(hallsensor), sensor, FALLING); //attach interrupt
-  pinMode(hallsensor, INPUT); //setup hall sensor
+  pinMode(hallsensor, INPUT_PULLUP); //setup hall sensor
 //  myservo.attach(9); //setup pin for servo
 //  myservo.write(openpos); //default state is open
 
@@ -60,7 +60,7 @@ void loop() {
     printTime = currentTime;
 
     update();
-    
+
   }
 
 }
