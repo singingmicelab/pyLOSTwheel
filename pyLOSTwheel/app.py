@@ -133,9 +133,9 @@ class SlidingSumWindow(SlidingWindow):
         if self.n == len(self.data):
             # Buffer is full.
             # Make room.
-            copy_size = self.window_size - 1
-            self.data[:copy_size] = self.data[-copy_size:,:]
-            self.data[-1,:] = 0
+            copy_size = self.window_size
+            self.data[:copy_size,:] = self.data[-copy_size:,:]
+            self.data[copy_size:,:] = 0
             self.n = copy_size
         
         self.data[self.n] += value
