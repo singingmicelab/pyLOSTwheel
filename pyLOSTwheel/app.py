@@ -298,6 +298,9 @@ class Experiment:
             self.fileHandle = None
             self.acquisitionThread.disableWriting()
 
+    def __str__(self):
+        return f'Experiment: {self.id}; Port: {self.port}; SN: {self.sn}'
+
 
 
 class SettingsDialog(QDialog):
@@ -316,8 +319,11 @@ class SettingsDialog(QDialog):
         self.basePath = self.defaultBasePath
         self.arduinos = get_arduinos_port_sn()
 
-        self.id = None
-        self.arduino = None
+        self.expInfo = []
+
+        self.experimentWidgets = []
+        self.experimentIdWidgets = []
+        self.experimentArduinoWidgets = []
 
         # basepath subwidget
         self.basePathWidget = QWidget()
@@ -331,17 +337,23 @@ class SettingsDialog(QDialog):
         self.basePathWidget.setLayout(basePathWidgetLayout)
 
         # experiment subwidget
-        self.experimentWidget = QWidget()
-        experimentWidgetLayout = QGridLayout()
-        self.experimentIdWidget = QLineEdit('')
-        self.experimentIdWidget.setFixedSize(100,23)
-        self.experimentArduinoWidget = QComboBox()
-        self.experimentArduinoWidget.addItems([f'{arduino[0]} ({arduino[1]})' for arduino in self.arduinos])
-        experimentWidgetLayout.addWidget(QLabel('id'), 0, 0)
-        experimentWidgetLayout.addWidget(QLabel('Port (SN)'), 0, 1)
-        experimentWidgetLayout.addWidget(self.experimentIdWidget, 1, 0)
-        experimentWidgetLayout.addWidget(self.experimentArduinoWidget, 1, 1)
-        self.experimentWidget.setLayout(experimentWidgetLayout)
+        for i in range(4):
+            experimentWidget = QWidget()
+            experimentWidgetLayout = QGridLayout()
+            experimentIdWidget = QLineEdit('')
+            experimentIdWidget.setFixedSize(100,23)
+            experimentArduinoWidget = QComboBox()
+            experimentArduinoWidget.addItem(None)
+            experimentArduinoWidget.addItems([f'{arduino[0]} ({arduino[1]})' for arduino in self.arduinos])
+            experimentWidgetLayout.addWidget(QLabel('id'), 0, 0)
+            experimentWidgetLayout.addWidget(QLabel('Port (SN)'), 0, 1)
+            experimentWidgetLayout.addWidget(experimentIdWidget, 1, 0)
+            experimentWidgetLayout.addWidget(experimentArduinoWidget, 1, 1)
+            experimentWidget.setLayout(experimentWidgetLayout)
+            
+            self.experimentWidgets.append(experimentWidget)
+            self.experimentIdWidgets.append(experimentIdWidget)
+            self.experimentArduinoWidgets.append(experimentArduinoWidget)
 
         QBtn = QDialogButtonBox.Ok | QDialogButtonBox.Cancel
 
@@ -351,7 +363,8 @@ class SettingsDialog(QDialog):
 
         self.layout = QVBoxLayout()
         self.layout.addWidget(self.basePathWidget)
-        self.layout.addWidget(self.experimentWidget)
+        for experimentWidget in self.experimentWidgets:
+            self.layout.addWidget(experimentWidget)
         self.layout.addWidget(self.buttonBox)
         self.setLayout(self.layout)
 
@@ -362,9 +375,19 @@ class SettingsDialog(QDialog):
 
     def accept(self):
         """override accept to validate input"""
-        if self.basePath != '' and self.experimentIdWidget.text() != '':
-            self.id = self.experimentIdWidget.text()
-            self.arduino = self.arduinos[self.experimentArduinoWidget.currentIndex()]
+        self.expInfo = []
+        expIds = []
+        expArduinos = []
+
+        for i in range(4):
+            expId = self.experimentIdWidgets[i].text()
+            expArduinoIdx = self.experimentArduinoWidgets[i].currentIndex()-1
+            if expId != '' and expArduinoIdx != -1:
+                self.expInfo.append((expId, self.arduinos[expArduinoIdx]))
+                expIds.append(expId)
+                expArduinos.append(expArduinoIdx)
+                
+        if self.basePath != '' and len(self.expInfo) > 0 and len(self.expInfo) == len(set(expIds)) and len(self.expInfo) == len(set(expArduinos)):
             super().accept()
 
         
@@ -383,7 +406,7 @@ class MainWindow(QMainWindow):
         # set window title
         self.setWindowTitle('pyLOSTwheel')
         # set window size
-        self.setMinimumSize(QSize(800,400))
+        self.setMinimumSize(QSize(800,500))
 
         # set initial state
         self.guiState = GuiState.IDLE
@@ -398,9 +421,8 @@ class MainWindow(QMainWindow):
         self._createStatusBar()
 
         self.basePath = None
-        self.id = None
-        self.arduinoInfo = None
-        self.experiment = None
+        self.expInfo = []
+        self.experiments = []
 
 
     def _createActions(self):
@@ -476,7 +498,8 @@ class MainWindow(QMainWindow):
         self.guiState = GuiState.MONITOR
         self.statusLabel.setText('Monitoring')
 
-        self.experiment.startMonitor()
+        for experiment in self.experiments:
+            experiment.startMonitor()
 
     def recordButtonClicked(self):
         print('start recording!')
@@ -488,7 +511,8 @@ class MainWindow(QMainWindow):
         self.guiState = GuiState.RECORD
         self.statusLabel.setText('Recording')
 
-        self.experiment.startRecord()
+        for experiment in self.experiments:
+            experiment.startRecord()
 
     def stopButtonClicked(self):
         print('stop!')
@@ -497,7 +521,8 @@ class MainWindow(QMainWindow):
         self.stopButton.setEnabled(False)
         self.settingsButton.setEnabled(True)
 
-        self.experiment.stop(self.guiState)
+        for experiment in self.experiments:
+            experiment.stop(self.guiState)
 
         self.guiState = GuiState.IDLE
         self.statusLabel.setText('Ready')
@@ -508,18 +533,31 @@ class MainWindow(QMainWindow):
         if settingsDialog.exec():
             print("Settings updated!")
             self.basePath = settingsDialog.basePath
-            self.id = settingsDialog.id
-            self.arduinoInfo = settingsDialog.arduino
+
+            self.expInfo = settingsDialog.expInfo
+            self.experiments = []
 
             self.basePathLabel.setText(self.basePath)
             self.monitorButton.setEnabled(True)
             self.recordButton.setEnabled(True)
 
             # create experiment
-            self.experiment = Experiment(self.id, self.arduinoInfo, self.basePath)
+            for i in range(len(self.expInfo)):
+                id = self.expInfo[i][0]
+                arduinoInfo = self.expInfo[i][1]
+                experiment = Experiment(id, arduinoInfo, self.basePath)
+                self.experiments.append(experiment)
+
+            for experiment in self.experiments:
+                print(experiment)
 
             # add graph widget
-            self.setCentralWidget(self.experiment.acquisitionGraphWidget)
+            centralWidget = QWidget()
+            centralLayout = QVBoxLayout()
+            for experiment in self.experiments:
+                centralLayout.addWidget(experiment.acquisitionGraphWidget)
+            centralWidget.setLayout(centralLayout)
+            self.setCentralWidget(centralWidget)
 
         else:
             print("Settings canceled")
