@@ -86,7 +86,7 @@ class SlidingWindow:
 
     def __init__(self, window_size, n_dim, buffer_size=None):
         if buffer_size is None:
-            self.buffer_size = 5 * window_size
+            self.buffer_size = window_size
         else:
             self.buffer_size = buffer_size
         self.n_dim = n_dim
@@ -124,26 +124,30 @@ class SlidingSumWindow(SlidingWindow):
 
         self.sum_window_size = sum_window_size
         self.current_sample_count = 0
+        self.current_bin = np.zeros((1, self.n_dim), dtype=np.float64)
 
     def reset(self):
         SlidingWindow.reset(self)
         self.current_sample_count = 0
+        self.current_bin = np.zeros((1, self.n_dim), dtype=np.float64)
 
     def append(self, value):
+        # print(self.n, len(self.data), self.current_sample_count, self.current_bin[0,2])
         if self.n == len(self.data):
             # Buffer is full.
             # Make room.
-            copy_size = self.window_size
+            copy_size = self.window_size - 1
             self.data[:copy_size,:] = self.data[-copy_size:,:]
-            self.data[copy_size:,:] = 0
             self.n = copy_size
         
-        self.data[self.n] += value
         self.current_sample_count += 1
+        self.current_bin += value
 
         if self.current_sample_count == self.sum_window_size:
-            self.current_sample_count = 0
+            self.data[self.n] = self.current_bin
             self.n += 1
+            self.current_sample_count = 0
+            self.current_bin = np.zeros((1, self.n_dim), dtype=np.float64)
 
 
 class AcquisitionGraphWidget(QWidget):
@@ -158,15 +162,18 @@ class AcquisitionGraphWidget(QWidget):
         self.id = id
         self.arduinoInfo = arduinoInfo
 
+        self.fs = 5
+
         # add label for id and port
         self.label = QLabel(f'{self.id} - {self.arduinoInfo[0]} ({self.arduinoInfo[1]})')
 
         # the three dimensions are: pc_timestamp, ar_timestamp, value
-        self.windowSize = 60 # seconds
-        self.dataWindow = SlidingWindow(self.windowSize, 3)
+        self.dataWindowSize = 60*self.fs # 60 seconds
+        self.dataWindow = SlidingWindow(self.dataWindowSize, 3)
 
-        self.sumWindowSize = 60 # 1 point every 60 seconds
-        self.dataSumWindow = SlidingSumWindow(self.windowSize, self.sumWindowSize, 3)
+        self.sumWindowSize = 60*self.fs # 1 point every 60 seconds
+        self.sumDataWindowSize = 120 # 2 hours
+        self.dataSumWindow = SlidingSumWindow(self.sumDataWindowSize, self.sumWindowSize, 3)
 
         fig = Figure()
         fig.set_layout_engine('tight')
@@ -207,30 +214,35 @@ class AcquisitionGraphWidget(QWidget):
 
         self.ax1.clear()
         if w.size == 0:
-            self.ax1.set_xlim([1, 1+self.windowSize])
+            xlim_l = 0
+            xlim_r = self.dataWindowSize/self.fs
         else:
             self.ax1.plot(w[:,1], w[:,2])
-            self.ax1.set_xlim([w[0,1], w[0,1]+self.windowSize])
-        self.ax1.set_xlabel('current minute')
-        self.ax1.set_xticks([])
+            xlim_l = w[0,1]
+            xlim_r = w[0,1]+self.dataWindowSize/self.fs
+        self.ax1.set_xlim([xlim_l, xlim_r])
+        self.ax1.set_xticks([int((xlim_l+xlim_r)/2)])
+        # self.ax1.set_xlabel('current second')
         self.ax1.set_ylabel('counts')
-        self.ax1.set_ylim([0,18])
-        self.ax1.set_yticks(range(0,20,2))
+        self.ax1.set_ylim([0,8])
+        self.ax1.set_yticks(range(0,10,2))
+        self.ax1.set_title('current minute')
 
         self.ax2.clear()
         if w_sum.size == 0:
             xlim_l = time.time()
-            xlim_r = xlim_l+self.sumWindowSize*self.windowSize
+            xlim_r = xlim_l+self.sumDataWindowSize*self.sumWindowSize/self.fs
         else:
-            time_bincenter = w_sum[:,0] / self.sumWindowSize - 0.5*self.sumWindowSize
-            self.ax2.bar(time_bincenter, w_sum[:,2], width=self.sumWindowSize)
-            xlim_l = time_bincenter[0]
-            xlim_r = time_bincenter[0]+self.sumWindowSize*self.windowSize
-        self.ax2.set_xlim([xlim_l-0.5*self.sumWindowSize, xlim_r+0.5*self.sumWindowSize])
+            time_bincenter = w_sum[:,0] / self.sumWindowSize
+            self.ax2.bar(time_bincenter, w_sum[:,2], width=self.sumWindowSize/self.fs)
+            xlim_l = time_bincenter[0] - 0.5*self.sumWindowSize/self.fs
+            xlim_r = time_bincenter[0] + self.sumDataWindowSize*self.sumWindowSize/self.fs - 0.5*self.sumWindowSize/self.fs
+        self.ax2.set_xlim([xlim_l, xlim_r])
         self.ax2.set_xticks([xlim_l, xlim_r])
         self.ax2.set_xticklabels([datetime.fromtimestamp(xlim_l).strftime('%H:%M'), datetime.fromtimestamp(xlim_r).strftime('%H:%M')])
         self.ax2.set_ylabel('counts in chunk')
         self.ax2.set_ylim([0,800])
+        self.ax2.set_title('recent history')
 
         self.canvas.draw()
 

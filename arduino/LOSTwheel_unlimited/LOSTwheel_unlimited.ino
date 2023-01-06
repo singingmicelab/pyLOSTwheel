@@ -55,7 +55,7 @@ void loop() {
 
   currentTime = millis() - startupTime;
 
-  if (currentTime - previousTime >= 1000) {
+  if (currentTime - previousTime >= 200) {
     previousTime = currentTime;
     printTime = currentTime;
 
