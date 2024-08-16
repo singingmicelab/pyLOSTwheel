@@ -149,11 +149,11 @@ class SlidingSumWindow(SlidingWindow):
             self.current_sample_count = 0
             self.current_bin = np.zeros((1, self.n_dim), dtype=np.float64)
 
-"""
+
 class AcquisitionGraphWidget(QWidget):
-    #A Widget that has two plots and updates its data based on QThread
+    """A Widget that has two plots and updates its data based on QThread
     
-    
+    """
     def __init__(self, acquisitionThread, id, arduinoInfo, *args, **kwargs):
 
         super().__init__(*args, **kwargs)
@@ -190,13 +190,15 @@ class AcquisitionGraphWidget(QWidget):
         self.acquisitionThread.measurement.connect(self.handleMeasurement)
 
     def reset(self):
-        #reset the slidingwindow and the graph
+        """reset the slidingwindow and the graph"""
         self.dataWindow.reset()
         self.dataSumWindow.reset()
         self.updateGraph()
 
     def handleMeasurement(self, pc_timestamp, arduino_timestamp, value):
-        #Receive a timestamped value and update the graph
+        """Receive a timestamped value and update the graph
+        
+        """
 
         print('graphing', (pc_timestamp, arduino_timestamp, value))
         self.dataWindow.append((pc_timestamp, arduino_timestamp, value))
@@ -204,9 +206,8 @@ class AcquisitionGraphWidget(QWidget):
 
         self.updateGraph()
 
-    
     def updateGraph(self):
-        #Update graph
+        """Update graph"""
 
         w = self.dataWindow.window()
         w_sum = self.dataSumWindow.window()
@@ -244,7 +245,6 @@ class AcquisitionGraphWidget(QWidget):
         self.ax2.set_title('recent history')
 
         self.canvas.draw()
-        """
 
 class Experiment:
     """A class that organizes an acquisition wheel experiment
@@ -266,12 +266,12 @@ class Experiment:
         self.acquisitionThread = LOSTwheelAcquisitionThread()
 
         # add acquisition graph
-        #self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.arduinoInfo)
+        self.acquisitionGraphWidget = AcquisitionGraphWidget(self.acquisitionThread, self.id, self.arduinoInfo)
 
     def startMonitor(self):
 
         # reset graph widget
-        #self.acquisitionGraphWidget.reset()
+        self.acquisitionGraphWidget.reset()
         self.acquisitionThread.disableWriting()
 
         # start serial connection
@@ -283,7 +283,7 @@ class Experiment:
     def startRecord(self):
 
         # reset graph widget
-        #self.acquisitionGraphWidget.reset()
+        self.acquisitionGraphWidget.reset()
         
         # start serial connection
         self.arduino = serial.Serial(port=self.port, baudrate=9600)
@@ -566,8 +566,8 @@ class MainWindow(QMainWindow):
             # add graph widget
             centralWidget = QWidget()
             centralLayout = QVBoxLayout()
-            #for experiment in self.experiments:
-                #centralLayout.addWidget(experiment.acquisitionGraphWidget)
+            for experiment in self.experiments:
+                centralLayout.addWidget(experiment.acquisitionGraphWidget)
             centralWidget.setLayout(centralLayout)
             self.setCentralWidget(centralWidget)
 
